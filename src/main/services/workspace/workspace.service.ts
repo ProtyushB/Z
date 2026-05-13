@@ -11,6 +11,7 @@ import {
 import { workspacesRepo } from '../db/repositories/workspaces.repo'
 import { githubTokenStore } from '../github/tokenStore'
 import { gitService } from '../git/git.service'
+import { mcfAssetsService } from '../fs/mcfAssets.service'
 import { logger } from '../../logger'
 import type { Workspace } from '@shared/schemas/workspace'
 
@@ -122,10 +123,11 @@ export const workspaceService = {
     const ws = workspacesRepo.get(workspaceId)
     if (!ws) return // already gone — no-op
     cleanup(workspaceDir(workspaceId))
+    mcfAssetsService.cleanupForWorkspace(workspaceId)
     workspacesRepo.delete(workspaceId)
     logger.info(
       { workspaceId, name: ws.name },
-      'workspace deleted (including cloned files and secrets)'
+      'workspace deleted (cloned files, mcf assets, secrets all gone)'
     )
   },
 

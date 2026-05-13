@@ -2,10 +2,19 @@
 // Both processes import this. If they drift, the compiler tells you.
 
 import type { Workspace, CreateWorkspaceInput } from '../schemas/workspace'
+import type { ModuleCreationFile, McfSummary } from '../schemas/mcf'
+
+export interface ReferenceEntity {
+  /** Snake_case entity slug derived from the Java class name. */
+  slug: string
+  /** Fields parsed from the entity's `@Column`-annotated declarations. */
+  fields: { name: string; type: string }[]
+}
 
 export interface ReferenceModule {
   slug: string
-  entityHints: string[]
+  /** Entities discovered in this vertical, with their field declarations. */
+  entities: ReferenceEntity[]
 }
 
 export type Procedures = {
@@ -42,6 +51,34 @@ export type Procedures = {
   // verticals in the cloned ModuleX repo. Empty array if the workspace
   // isn't cloned or doesn't look like ModuleX.
   'reference:scan': { req: { workspaceId: string }; res: ReferenceModule[] }
+
+  // MCF library (Phase 2). The MCF itself is JSON-in-TEXT in `mcfs`; list
+  // returns a lightweight summary, get/save handle the full object.
+  'mcf:list': { req: { workspaceId: string }; res: McfSummary[] }
+  'mcf:get': { req: { workspaceId: string; slug: string }; res: ModuleCreationFile | null }
+  // Save runs cross-field validation (superRefine) at the IPC boundary
+  // BEFORE the repo's shallow Zod parse. Invalid MCFs throw.
+  'mcf:save': { req: { workspaceId: string; mcf: ModuleCreationFile }; res: void }
+  'mcf:delete': { req: { workspaceId: string; slug: string }; res: void }
+  // Validate without saving — used by the form UI for live error display.
+  'mcf:validate': {
+    req: { mcf: unknown }
+    res: { ok: true } | { ok: false; issues: string[] }
+  }
+
+  // Screenshot file management for MCFs (Phase 2, Chunk 4). Bytes are
+  // transferred via structured-clone over IPC. The main process stores them
+  // at <userData>/mcf-assets/<workspaceId>/<mcfSlug>/<random>.{ext} and
+  // returns just the filename — the MCF stores the filename, not the full
+  // path, so the data stays portable.
+  'mcf:uploadScreenshot': {
+    req: { workspaceId: string; mcfSlug: string; fileName: string; bytes: ArrayBuffer }
+    res: { filename: string }
+  }
+  'mcf:deleteScreenshot': {
+    req: { workspaceId: string; mcfSlug: string; filename: string }
+    res: void
+  }
 }
 
 // No streamed events yet. Will grow in Phase 3+ (module-run progress).

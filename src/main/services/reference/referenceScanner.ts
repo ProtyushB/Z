@@ -1,28 +1,66 @@
-import { readdirSync, existsSync, statSync } from 'node:fs'
+import { readdirSync, existsSync, statSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-
-export interface ReferenceModule {
-  slug: string
-  entityHints: string[]
-}
+import type { ReferenceModule, ReferenceEntity } from '@shared/ipc/contracts'
 
 // Phase 2's MCF authoring needs to enumerate the "module verticals" inside a
-// cloned ModuleX repo so the user can pick a reference to mirror. This is a
-// minimal skeleton — just enumerate directory names under com/modulex/modules/
-// and derive entity slugs from controller filenames. Future polish in Phase 2
-// will read entity classes for full field information.
+// cloned ModuleX repo so the user can pick a reference to mirror. Chunk 5
+// deepened this from "list controller names" to "parse the JPA entity Java
+// files so we know what fields each entity has." Phase 3's Spec slice will
+// need this same data — putting the parser here so both consumers share it.
+
+/** Strip `verticalClass` prefix and CamelCase → snake_case. */
+function classNameToEntitySlug(className: string, verticalClass: string): string {
+  const stripped = className.startsWith(verticalClass)
+    ? className.slice(verticalClass.length)
+    : className
+  if (!stripped) return ''
+  return stripped
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .toLowerCase()
+}
+
+/**
+ * Regex-based JPA entity field extractor. Handles typical Lombok-style entity
+ * files: optional annotation block, then `private TYPE name [= default];`.
+ * Skips `serialVersionUID` and `static final` fields. Not exhaustive — exotic
+ * constructs (multi-line annotations with nested parens, fields without
+ * `private`) may slip through. Sufficient for ModuleX-style code; Phase 3's
+ * Spec slice can re-validate via Claude if precision matters.
+ */
+function parseEntityFields(source: string): { name: string; type: string }[] {
+  const clean = source
+    .replace(/\/\/[^\n]*/g, '')       // line comments
+    .replace(/\/\*[\s\S]*?\*\//g, '') // block comments
+
+  const fields: { name: string; type: string }[] = []
+  // Match: optional annotation(s), then `private <type> <name>[= ...];`
+  const re = /(?:@\w+(?:\([^)]*\))?\s*)*\s*private\s+([\w<>,\s?.]+?)\s+(\w+)\s*(?:=[^;]+)?;/g
+
+  let m: RegExpExecArray | null
+  while ((m = re.exec(clean)) !== null) {
+    const type = m[1].trim().replace(/\s+/g, ' ')
+    const name = m[2].trim()
+    if (name === 'serialVersionUID') continue
+    if (/\b(static|final)\b/.test(type)) continue
+    fields.push({ name, type })
+  }
+
+  return fields
+}
 
 export const referenceScanner = {
   /**
-   * Scan the cloned backend repo for module verticals.
+   * Scan the cloned backend repo for module verticals + their entities.
    *
    * For each directory under `<backend>/src/main/java/com/modulex/modules/`:
-   *   - The directory name is the vertical slug (`parlour`, `pharmacy`, …).
-   *   - Controller files inside `<vertical>/controller/` are stripped to
-   *     produce entity slugs (`ParlourCategoryController.java` → `category`).
+   *   1. Try parsing every `*.java` in `<vertical>/entity/` for fields.
+   *   2. Fall back to listing controller filenames (with empty `fields`) if
+   *      the entity dir doesn't exist — keeps display useful for incomplete
+   *      verticals like `pharmacy_polyclinic`.
    *
-   * Returns an empty array if the modules directory doesn't exist (e.g.,
-   * the repo isn't ModuleX at all or hasn't been cloned yet).
+   * Returns empty array if the modules directory doesn't exist (the repo
+   * isn't ModuleX or hasn't been cloned yet).
    */
   scanBackend(backendPath: string): ReferenceModule[] {
     const modulesDir = join(backendPath, 'src', 'main', 'java', 'com', 'modulex', 'modules')
@@ -34,26 +72,49 @@ export const referenceScanner = {
       .sort()
 
     return verticals.map((slug) => {
-      const controllerDir = join(modulesDir, slug, 'controller')
-      let entityHints: string[] = []
+      // Camel-case prefix used by the class names: parlour → Parlour.
+      // Underscore-separated slugs need handling too: pharmacy_polyclinic → PharmacyPolyclinic.
+      const verticalClass = slug
+        .split('_')
+        .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+        .join('')
 
-      if (existsSync(controllerDir) && statSync(controllerDir).isDirectory()) {
-        // Vertical class prefix is the slug capitalized (parlour → Parlour).
-        // We strip it so `ParlourCategoryController` → `Category` → `category`.
-        const verticalClass = slug.charAt(0).toUpperCase() + slug.slice(1)
-        entityHints = readdirSync(controllerDir)
-          .filter((f) => f.endsWith('Controller.java'))
-          .map((f) =>
-            f
-              .replace(/Controller\.java$/, '')
-              .replace(new RegExp(`^${verticalClass}`), '')
-              .replace(/^./, (c) => c.toLowerCase())
-          )
-          .filter((s) => s.length > 0)
-          .sort()
+      const entities: ReferenceEntity[] = []
+
+      // Primary path: parse entity .java files.
+      const entityDir = join(modulesDir, slug, 'entity')
+      if (existsSync(entityDir) && statSync(entityDir).isDirectory()) {
+        for (const file of readdirSync(entityDir).filter((f) => f.endsWith('.java'))) {
+          const fullPath = join(entityDir, file)
+          const className = file.replace(/\.java$/, '')
+          const entitySlug = classNameToEntitySlug(className, verticalClass)
+          if (!entitySlug) continue
+          let source: string
+          try {
+            source = readFileSync(fullPath, 'utf-8')
+          } catch {
+            continue
+          }
+          entities.push({ slug: entitySlug, fields: parseEntityFields(source) })
+        }
       }
 
-      return { slug, entityHints }
+      // Fallback: derive slugs from controller filenames if no entities found.
+      if (entities.length === 0) {
+        const controllerDir = join(modulesDir, slug, 'controller')
+        if (existsSync(controllerDir) && statSync(controllerDir).isDirectory()) {
+          for (const file of readdirSync(controllerDir).filter((f) =>
+            f.endsWith('Controller.java')
+          )) {
+            const className = file.replace(/Controller\.java$/, '')
+            const entitySlug = classNameToEntitySlug(className, verticalClass)
+            if (entitySlug) entities.push({ slug: entitySlug, fields: [] })
+          }
+        }
+      }
+
+      entities.sort((a, b) => a.slug.localeCompare(b.slug))
+      return { slug, entities }
     })
   }
 }

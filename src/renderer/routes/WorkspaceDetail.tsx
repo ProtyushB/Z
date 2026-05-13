@@ -168,25 +168,50 @@ export function WorkspaceDetail(): JSX.Element {
         )}
       </section>
 
+      {cloned && (
+        <section>
+          <h2 className="text-sm font-medium text-neutral-300 mb-2">Module Creation Files</h2>
+          <Link
+            to={`/workspaces/${id}/mcfs`}
+            className="block rounded border border-neutral-800 bg-neutral-900 p-4 hover:bg-neutral-800/60 hover:border-neutral-700 transition-colors"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-medium">Authored MCFs</div>
+                <div className="text-xs text-neutral-500 mt-1">
+                  Spec files for new modules. Phase 3+ agents read these as the canonical input.
+                </div>
+              </div>
+              <div className="text-neutral-600 text-xl leading-none">›</div>
+            </div>
+          </Link>
+        </section>
+      )}
+
       {cloned && refs.length > 0 && (
         <section>
           <h2 className="text-sm font-medium text-neutral-300 mb-2">Reference modules detected</h2>
           <div className="rounded border border-neutral-800 bg-neutral-900 p-4">
             <p className="text-xs text-neutral-500 mb-3">
-              Module verticals found in the cloned backend. Phase 2 will use one as a template.
+              Module verticals found in the cloned backend. Phase 2 uses one as a template;
+              Phase 3+ agents read the field-level data for code generation.
             </p>
             <ul className="space-y-1.5">
-              {refs.map((r) => (
-                <li key={r.slug} className="text-sm">
-                  <span className="font-mono text-neutral-200">{r.slug}</span>
-                  {r.entityHints.length > 0 && (
-                    <span className="text-xs text-neutral-500 ml-2">
-                      ({r.entityHints.length}: {r.entityHints.slice(0, 6).join(', ')}
-                      {r.entityHints.length > 6 ? '…' : ''})
-                    </span>
-                  )}
-                </li>
-              ))}
+              {refs.map((r) => {
+                const totalFields = r.entities.reduce((sum, e) => sum + e.fields.length, 0)
+                return (
+                  <li key={r.slug} className="text-sm">
+                    <span className="font-mono text-neutral-200">{r.slug}</span>
+                    {r.entities.length > 0 && (
+                      <span className="text-xs text-neutral-500 ml-2">
+                        ({r.entities.length} entities · {totalFields} fields:{' '}
+                        {r.entities.slice(0, 6).map((e) => e.slug).join(', ')}
+                        {r.entities.length > 6 ? '…' : ''})
+                      </span>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           </div>
         </section>

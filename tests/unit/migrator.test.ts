@@ -44,6 +44,7 @@ describe('runMigrations', () => {
     expect(tableNames).toContain('workspaces')
     expect(tableNames).toContain('secrets')
     expect(tableNames).toContain('workspace_secrets')
+    expect(tableNames).toContain('mcfs')
   })
 
   it('records each applied migration in __migrations', () => {
@@ -51,7 +52,7 @@ describe('runMigrations', () => {
     const applied = db.exec('SELECT version FROM __migrations ORDER BY version')[0].values.map(
       (r) => r[0] as string
     )
-    expect(applied).toEqual(['V001', 'V002', 'V003', 'V004'])
+    expect(applied).toEqual(['V001', 'V002', 'V003', 'V004', 'V005'])
   })
 
   it('is idempotent — running twice does not re-apply', () => {

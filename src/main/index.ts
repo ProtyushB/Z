@@ -1,6 +1,10 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { initLogger, logger } from './logger'
+import { initDb, closeDb } from './services/db/client'
+import { runMigrations } from './services/db/migrator'
+import { registerWorkspaceHandlers } from './ipc/workspace.handlers'
+import { registerGithubHandlers } from './ipc/github.handlers'
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -37,9 +41,23 @@ function createWindow(): void {
 
 ipcMain.handle('app:ping', () => ({ pong: true as const, at: new Date().toISOString() }))
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   initLogger()
   logger.info({ version: app.getVersion() }, 'app ready')
+
+  try {
+    await initDb()
+    runMigrations()
+    logger.info('db ready')
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, 'db init failed; quitting')
+    app.quit()
+    return
+  }
+
+  registerWorkspaceHandlers()
+  registerGithubHandlers()
+
   createWindow()
 
   app.on('activate', () => {
@@ -48,6 +66,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  closeDb()
   if (process.platform !== 'darwin') app.quit()
 })
 
